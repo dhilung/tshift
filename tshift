@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+
+# shift creation and modification timestamps of a file.
+
+# created using: https://www.perplexity.ai/search/write-a-python-cli-tool-to-shi-5NxHFpbERX.MTxLuzaXRqw
+
+import os
+import argparse
+import re
+from datetime import datetime, timedelta
+import subprocess
+import platform
+
+def format_timedelta(td):
+    days, remainder = divmod(td.total_seconds(), 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    
+    parts = []
+    if days: parts.append(f"{int(days)}d")
+    if hours: parts.append(f"{int(hours)}h")
+    if minutes: parts.append(f"{int(minutes)}m")
+    if seconds or not parts: parts.append(f"{int(seconds)}s")
+    
+    return "".join(parts)
+
+def get_file_time(file_path):
+    stat = os.stat(file_path)
+    try:
+        return datetime.fromtimestamp(stat.st_birthtime)
+    except AttributeError:
+        return datetime.fromtimestamp(stat.st_mtime)
+
+def shift_timestamps(file_path, duration, backward=False):
+    # Get current timestamps
+    stat = os.stat(file_path)
+    current_modified = datetime.fromtimestamp(stat.st_mtime)
+    
+    try:
+        current_created = datetime.fromtimestamp(stat.st_birthtime)
+    except AttributeError:
+        current_created = current_modified
+        print("Warning: Creation time not available, using modification time instead.")
+
+    # Apply duration (forward or backward)
+    if backward:
+        duration = -duration
+
+    # Calculate new timestamps
+    new_modified = current_modified + duration
+    new_created = current_created + duration
+
+    if platform.system() == 'Darwin':  # macOS
+        mod_date = new_modified.strftime('%m/%d/%Y %H:%M:%S')
+        create_date = new_created.strftime('%m/%d/%Y %H:%M:%S')
+        subprocess.run(['SetFile', '-d', create_date, '-m', mod_date, file_path], check=True)
+    else:
+        os.utime(file_path, (new_modified.timestamp(), new_modified.timestamp()))
+        print("Warning: Creation time could not be changed on this system.")
+    
+    direction = "backward" if backward else "forward"
+    print(f"Timestamps for {file_path} shifted {direction} by {abs(duration)}:")
+    print(f"Modified: {current_modified} -> {new_modified}")
+    print(f"Created: {current_created} -> {new_created}")
+
+def parse_duration(duration_str):
+    units = {
+        's': 'seconds',
+        'm': 'minutes',
+        'h': 'hours',
+        'd': 'days'
+    }
+    
+    pattern = re.compile(r'(\d+)([smhd])', re.IGNORECASE)
+    matches = pattern.findall(duration_str)
+    
+    if not matches:
+        raise ValueError("Invalid duration format. Use combinations like 1d, 2h30m, 1d6h, etc.")
+    
+    duration = timedelta()
+    for value, unit in matches:
+        unit = unit.lower()
+        if unit not in units:
+            raise ValueError(f"Invalid duration unit: {unit}. Use s, m, h, or d.")
+        duration += timedelta(**{units[unit]: int(value)})
+    
+    return duration
+
+def compute_time_diff(file1, file2):
+    time1 = get_file_time(file1)
+    time2 = get_file_time(file2)
+    diff = abs(time2 - time1)
+    return format_timedelta(diff)
+
+def main():
+    parser = argparse.ArgumentParser(description="Shift file timestamps or compute time difference between files.")
+    parser.add_argument("file", help="Path to the file (or first file for --diff)")
+    parser.add_argument("duration", help="Duration to shift (e.g., 1h, 30m, 2d, 1d6h30m) or path to second file for --diff")
+    parser.add_argument("-b", "--backward", action="store_true", help="Shift timestamps backward")
+    parser.add_argument("--diff", action="store_true", help="Compute time difference between two files")
+    
+    args = parser.parse_args()
+    
+    try:
+        if args.diff:
+            diff = compute_time_diff(args.file, args.duration)
+            print(f"Time difference between {args.file} and {args.duration}: {diff}")
+        else:
+            duration = parse_duration(args.duration)
+            shift_timestamps(args.file, duration, args.backward)
+    except ValueError as e:
+        print(f"Error: {e}")
+    except FileNotFoundError as e:
+        print(f"Error: File not found - {e}")
+    except PermissionError:
+        print(f"Error: Permission denied for '{args.file}'.")
+    except subprocess.CalledProcessError:
+        print(f"Error: Failed to execute SetFile command. Make sure you have the necessary permissions.")
+
+if __name__ == "__main__":
+    main()
